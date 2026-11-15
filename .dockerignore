@@ -1,0 +1,11 @@
+.git
+.gitignore
+.env
+.free_models_cache.json
+*.venv
+venv
+.venv
+__pycache__
+.DS_Store
+quant_chem/
+

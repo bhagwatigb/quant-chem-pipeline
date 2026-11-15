@@ -1,0 +1,18 @@
+# Secrets & local cache
+.env
+.free_models_cache.json
+
+# Python & Virtual Environments
+__pycache__/
+*.py[cod]
+*.venv/
+venv/
+.venv/
+
+# macOS & Data Assets
+.DS_Store
+quant_chem/notes/*.pdf
+quant_chem/assets/
+quant_chem/transcription/
+quant_chem/final_resource/
+
