@@ -392,7 +392,7 @@ class FreeLLMRouter:
                 speed_val = float(m["measured_tps"])
                 src = "Measured"
             else:
-                speed_val = float(m.get("est_tps") or _estimate_model_tps(prov, m.get("id", "")))
+                speed_val = float(m.get('est_tps') or _estimate_model_tps(prov, m.get("id", "")))
                 src = "Estimated"
             print(f"{i:<3} {m.get('option','?'):<4} {prov:<12} {mid:<36} {speed_val:>11.1f} t/s {src:<10} {m.get('output_limit',0):>10,}")
 
@@ -419,8 +419,29 @@ class FreeLLMRouter:
         print(f"[Router] Active pipeline: Custom Model ({provider}:{model_id}) — will route back to choice menu on any error.")
         return True
 
+    def configure_non_interactive(self, option: str, custom_model_spec: Optional[str] = None) -> None:
+        opt = str(option).strip().lower()
+        if opt == "9" or custom_model_spec:
+            spec = custom_model_spec or opt
+            if ":" in spec:
+                prov, mid = spec.split(":", 1)
+                prov, mid = prov.strip().lower(), mid.strip()
+                if prov in PROVIDER_RATE_INFO:
+                    self.custom_model = {"provider": prov, "id": mid}
+                    self.selected_option = "9"
+                    print(f"[Router] Non-interactive custom model configured: {prov}:{mid}")
+                    return
+            sys.exit("❌ Error: Option 9 or custom model specification requires format 'provider:model_id' (e.g., groq:llama-3.3-70b-versatile).")
+        
+        if opt in self.OPTIONS or opt in ("7", "8"):
+            self.selected_option = opt
+            print(f"[Router] Non-interactive pipeline selected: Option {opt}")
+            return
+        
+        sys.exit(f"❌ Error: Invalid option '{option}' specified. Choose from 1-9.")
+
     def select_provider_interactive(self, default_option: Optional[str] = None, vision_only: bool = False) -> str:
-        if default_option in self.OPTIONS or default_option in ("7", "8"):
+        if default_option in self.OPTIONS or default_option in ("7", "8", "9"):
             self.selected_option = default_option
             return default_option
         while True:
@@ -490,6 +511,8 @@ class FreeLLMRouter:
             # Option 9: Custom Model
             if self.selected_option == "9":
                 if not self.custom_model:
+                    if not sys.stdin.isatty():
+                        sys.exit("❌ Error: Custom model configuration required in non-mode.")
                     self.selected_option = None
                     continue
                 provider = self.custom_model["provider"]
@@ -500,6 +523,8 @@ class FreeLLMRouter:
                     return text, f"{provider}:{mid}"
                 except Exception as exc:
                     print(f"\n[Custom Model Error] {provider}:{mid} threw an error: {exc}")
+                    if not sys.stdin.isatty():
+                        sys.exit(f"❌ Error in non-interactive mode: Custom model {provider}:{mid} failed: {exc}")
                     print("[Router] Routing you back to the choice options menu to select an alternative pipeline...")
                     self.selected_option = None
                     self.custom_model = None
@@ -532,6 +557,8 @@ class FreeLLMRouter:
                     print(f"[Fallback] {provider}:{mid} failed ({exc}). Rerouting to next best model...")
                     
             print("[Router] All models in the selected option failed:\n" + "\n".join(errors))
+            if not sys.stdin.isatty():
+                sys.exit("❌ Error in non-interactive mode: All models in selected option failed.")
             print("[Router] Routing back to the choice options menu...")
             self.selected_option = None
 
@@ -610,9 +637,12 @@ def _extract_single(pdf_path: Path) -> None:
         pix.save(str(out_dir / f"page_{page_num}.png"))
     print(f"  -> Rendered {len(doc)} pages to {out_dir}")
 
-def task_verify(refresh: bool) -> None:
+def task_verify(refresh: bool, option: Optional[str] = None, model: Optional[str] = None) -> None:
     router = FreeLLMRouter(force_refresh=refresh)
-    router.select_provider_interactive(vision_only=True)
+    if option:
+        router.configure_non_interactive(option, model)
+    else:
+        router.select_provider_interactive(vision_only=True)
     test_img = Path("quant_chem/assets/Lecture_18_assets/page_1.png")
     if not test_img.exists():
         print(f"❌ Error: Could not find '{test_img}'. Run `python pipeline.py extract quant_chem/notes` first.")
@@ -628,7 +658,7 @@ def task_verify(refresh: bool) -> None:
     except Exception as e:
         print(f"❌ Pipeline failed: {e}")
 
-def task_transcribe(target: Path, refresh: bool) -> None:
+def task_transcribe(target: Path, refresh: bool, option: Optional[str] = None, model: Optional[str] = None) -> None:
     SYSTEM_PROMPT = (
         "You are a quantum chemistry professor transcribing a lecture slide into clean Markdown. "
         "Use LaTeX ($ for inline, $$ for display) for ALL math variables, operators, wavefunctions, and equations. "
@@ -640,7 +670,10 @@ def task_transcribe(target: Path, refresh: bool) -> None:
     USER_PROMPT = "Transcribe this quantum chemistry lecture page completely into clean Markdown + LaTeX."
     
     router = FreeLLMRouter(force_refresh=refresh)
-    router.select_provider_interactive(vision_only=True)
+    if option:
+        router.configure_non_interactive(option, model)
+    else:
+        router.select_provider_interactive(vision_only=True)
     
     def _transcribe_folder(assets_dir: Path, output_md: Path):
         image_files = sorted([f for f in assets_dir.iterdir() if f.name.startswith("page_") and f.suffix == ".png"], key=lambda p: int(p.stem.split("_")[1]))
@@ -684,6 +717,8 @@ if __name__ == "__main__":
     parser.add_argument("command", choices=["extract", "verify", "transcribe"], help="Task to run")
     parser.add_argument("target", nargs="?", default="", help="Target file or directory")
     parser.add_argument("--refresh-models", action="store_true", help="Force refresh cached API models")
+    parser.add_argument("--option", type=str, help="Non-interactive API pipeline option (1-9)")
+    parser.add_argument("--model", type=str, help="Specific custom model specification in 'provider:model_id' format (for option 9)")
     args = parser.parse_args()
 
     if args.command == "extract":
@@ -691,8 +726,8 @@ if __name__ == "__main__":
         task_extract(target_path)
     
     elif args.command == "verify":
-        task_verify(args.refresh_models)
+        task_verify(args.refresh_models, args.option, args.model)
     
-    elif arg_cmd := args.command == "transcribe":
+    elif args.command == "transcribe":
         target_path = Path(args.target) if args.target else Path("quant_chem/assets")
-        task_transcribe(target_path, args.refresh_models)
+        task_transcribe(target_path, args.refresh_models, args.option, args.model)
